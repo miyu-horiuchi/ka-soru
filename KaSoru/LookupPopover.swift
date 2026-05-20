@@ -68,14 +68,16 @@ final class LookupPopover {
         self.onClose = onClose
         self.model = LookupViewModel(session: session)
 
+        // Visible-by-default window so we can confirm positioning before tuning the look.
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 200),
-            styleMask: [.borderless, .nonactivatingPanel, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
+            styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
+        panel.title = "ka-soru"
+        panel.isOpaque = true
+        panel.backgroundColor = NSColor.windowBackgroundColor
         panel.hasShadow = true
         panel.level = .floating
         panel.isFloatingPanel = true
@@ -85,30 +87,27 @@ final class LookupPopover {
 
         self.window = panel
         self.model.popover = self
+
+        // Install the SwiftUI host immediately. (NSWindow auto-creates a blank
+        // contentView, so checking for nil later doesn't help.)
+        let host = NSHostingView(rootView: LookupView(model: model, onClose: { [weak self] in self?.close() }))
+        host.frame = NSRect(x: 0, y: 0, width: 380, height: 240)
+        host.autoresizingMask = [.width, .height]
+        panel.contentView = host
+        DebugLog.write("POPOVER: init with hosting view, frame=\(host.frame)")
     }
 
-    /// Shows the popover at the given screen point, sends the initial prompt.
-    func show(near point: NSPoint, initialPrompt: String?) {
-        window.contentView = NSHostingView(rootView: LookupView(model: model, onClose: { [weak self] in self?.close() }))
-        positionWindow(near: point)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        installClickOutsideMonitor()
-
-        if let p = initialPrompt {
-            model.startInitial(prompt: p)
-        }
-    }
-
-    /// Re-uses the existing popover for a new prompt (when the user triggers Cmd+E again).
+    /// Shows the popover and submits a prompt.
     func appendNewPrompt(_ prompt: String, near point: NSPoint) {
+        DebugLog.write("POPOVER: appendNewPrompt visible=\(window.isVisible)")
         if !window.isVisible {
-            window.makeKeyAndOrderFront(nil)
             positionWindow(near: point)
-            installClickOutsideMonitor()
+            window.orderFrontRegardless()
+            DebugLog.write("POPOVER: shown at \(window.frame)")
         }
-        NSApp.activate(ignoringOtherApps: true)
-        model.startInitial(prompt: prompt)
+        if !prompt.isEmpty {
+            model.startInitial(prompt: prompt)
+        }
     }
 
     func close() {
@@ -143,11 +142,12 @@ final class LookupPopover {
 
     private func installClickOutsideMonitor() {
         removeClickOutsideMonitor()
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+        // Delay slightly so the click that opened the popover doesn't immediately close it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self = self else { return }
-            // Global monitor doesn't see clicks inside our own window — those clicks
-            // never reach here, so any event here means click-outside.
-            self.close()
+            self.clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                self?.close()
+            }
         }
     }
 

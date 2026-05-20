@@ -12,15 +12,20 @@ final class AppCoordinator {
     private var menuBar: MenuBarController?
 
     func start() {
+        DebugLog.write("KASORU: AppCoordinator.start()")
         menuBar = MenuBarController(
             onOpenSettings: { [weak self] in self?.openSettings() },
             onNewSession: { [weak self] in self?.startNewSession() },
             onQuit: { NSApp.terminate(nil) }
         )
 
-        if Permissions.accessibility() == .granted && Permissions.inputMonitoring() == .granted {
+        let ax = Permissions.accessibility()
+        DebugLog.write("KASORU: permissions ax=\(ax) (input monitoring no longer required)")
+        if ax == .granted {
             attachHotkey()
         } else {
+            DebugLog.write("KASORU: missing accessibility, prompting")
+            Permissions.promptAccessibility()
             showPermissionGuide()
         }
     }
@@ -35,8 +40,14 @@ final class AppCoordinator {
     }
 
     private func attachHotkey() {
-        let listener = HotkeyListener { [weak self] in self?.onTrigger() }
-        if !listener.start() {
+        DebugLog.write("KASORU: attachHotkey()")
+        let listener = HotkeyListener { [weak self] in
+            DebugLog.write("KASORU: trigger callback fired")
+            self?.onTrigger()
+        }
+        let started = listener.start()
+        DebugLog.write("KASORU: HotkeyListener.start() -> \(started)")
+        if !started {
             Toast.show("ka-soru couldn't listen for keys. Re-grant Input Monitoring.")
         }
         hotkey = listener
@@ -44,28 +55,35 @@ final class AppCoordinator {
 
     private func onTrigger() {
         let selection = SelectionReader.read()
+        DebugLog.write("TRIG: selection=\((selection ?? "<nil>").prefix(60)) popover=\(popover != nil ? "exists" : "nil")")
 
         if (selection == nil || selection!.isEmpty) && popover == nil {
+            DebugLog.write("TRIG: no selection + no popover → toast")
             Toast.show("Highlight a sentence first.")
             return
         }
 
         let cliName = store.load().defaultCLI.rawValue
-        if !cliIsAvailable(cliName) {
+        let available = cliIsAvailable(cliName)
+        DebugLog.write("TRIG: cli=\(cliName) available=\(available)")
+        if !available {
             Toast.show("\(cliName) CLI not found on PATH. Install it first.")
             return
         }
 
         ensureSession(cliName: cliName)
         ensurePopover()
+        DebugLog.write("TRIG: session=\(cliSession != nil) popover=\(popover != nil)")
 
         let point = NSEvent.mouseLocation
+        DebugLog.write("TRIG: mouse=\(point)")
         if let text = selection, !text.isEmpty {
             let template = PromptTemplate(template: store.load().promptTemplate)
             let prompt = template.render(with: text)
+            DebugLog.write("TRIG: appending prompt (\(prompt.prefix(60))…)")
             popover?.appendNewPrompt(prompt, near: point)
         } else {
-            // No new selection — just bring the popover to front
+            DebugLog.write("TRIG: no new text, just bringing popover forward")
             popover?.appendNewPrompt("", near: point)
         }
     }

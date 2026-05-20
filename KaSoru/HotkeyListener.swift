@@ -2,68 +2,50 @@ import AppKit
 import Carbon.HIToolbox
 
 final class HotkeyListener {
-    private static let keyCodeE: Int64 = Int64(kVK_ANSI_E)
+    private static let keyCodeE: Int64 = Int64(kVK_ANSI_D)  // re-using; will check actual key below
 
     private let onTrigger: () -> Void
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var monitor: Any?
 
     init(onTrigger: @escaping () -> Void) {
         self.onTrigger = onTrigger
     }
 
-    /// Begins listening for Cmd+E. Requires Input Monitoring permission.
-    /// Returns false if the tap could not be created (permission missing).
+    /// Begins listening for Cmd+E using NSEvent's global monitor.
+    /// Requires Accessibility permission (no Input Monitoring needed).
     @discardableResult
     func start() -> Bool {
-        let mask = (1 << CGEventType.keyDown.rawValue)
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        // Remove any existing
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
 
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: CGEventMask(mask),
-            callback: { _, type, event, refcon in
-                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
-                let listener = Unmanaged<HotkeyListener>.fromOpaque(refcon).takeUnretainedValue()
-                listener.handle(type: type, event: event)
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: selfPtr
-        ) else {
-            return false
+        let m = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self = self else { return }
+            self.handle(event: event)
         }
+        self.monitor = m
 
-        self.eventTap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        self.runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        return true
+        DebugLog.write("KASORU: HotkeyListener attached global monitor (\(m == nil ? "nil" : "ok"))")
+        return m != nil
     }
 
     func stop() {
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
+        if let m = monitor {
+            NSEvent.removeMonitor(m)
+            monitor = nil
         }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-        }
-        eventTap = nil
-        runLoopSource = nil
     }
 
-    private func handle(type: CGEventType, event: CGEvent) {
-        guard type == .keyDown else { return }
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        guard keyCode == Self.keyCodeE else { return }
+    private func handle(event: NSEvent) {
+        // event.keyCode is UInt16 on NSEvent
+        let keyCode = event.keyCode
+        // kVK_ANSI_E = 0x0E
+        guard keyCode == UInt16(kVK_ANSI_E) else { return }
 
-        // Require Command alone — no Shift/Option/Control.
-        let modifiers: CGEventFlags = [.maskCommand, .maskShift, .maskAlternate, .maskControl]
-        let flags = event.flags.intersection(modifiers)
-        guard flags == .maskCommand else { return }
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        DebugLog.write("KASORU: E keyDown, flags=\(flags.rawValue)")
+        guard flags == [.command] else { return }
 
+        DebugLog.write("KASORU: Cmd+E matched, dispatching")
         DispatchQueue.main.async { [weak self] in
             self?.onTrigger()
         }
