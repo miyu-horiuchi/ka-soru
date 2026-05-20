@@ -1,0 +1,45 @@
+name: KaSoru
+options:
+  bundleIdPrefix: dev.kasoru
+  deploymentTarget:
+    macOS: "14.0"
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.2.0"
+targets:
+  KaSoru:
+    type: application
+    platform: macOS
+    sources:
+      - path: KaSoru
+    info:
+      path: KaSoru/Info.plist
+      properties:
+        LSUIElement: true
+        NSAccessibilityUsageDescription: "ka-soru reads the highlighted text from the frontmost app to send it to codex or claude."
+        NSAppleEventsUsageDescription: "ka-soru reads the highlighted text from the frontmost app."
+    dependencies:
+      - package: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.kasoru.KaSoru
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+  KaSoruTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: KaSoruTests
+    dependencies:
+      - target: KaSoru
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.kasoru.KaSoruTests
