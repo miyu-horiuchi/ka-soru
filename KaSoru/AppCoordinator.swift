@@ -4,13 +4,12 @@ import Foundation
 @MainActor
 final class AppCoordinator {
     private let store = SettingsStore()
-    private var session: SessionManager?
-    private var terminal: TerminalWindowController?
+    private var cliSession: CLISession?
+    private var popover: LookupPopover?
     private var settingsWindow: SettingsWindowController?
     private var permissionGuide: PermissionGuideController?
     private var hotkey: HotkeyListener?
     private var menuBar: MenuBarController?
-    private var sessionExitedUnexpectedly = false
 
     func start() {
         menuBar = MenuBarController(
@@ -46,38 +45,55 @@ final class AppCoordinator {
     private func onTrigger() {
         let selection = SelectionReader.read()
 
-        // Nothing highlighted and no session exists yet
-        if (selection == nil || selection!.isEmpty) && session == nil {
+        if (selection == nil || selection!.isEmpty) && popover == nil {
             Toast.show("Highlight a sentence first.")
             return
         }
 
-        let cli = store.load().defaultCLI.rawValue
-        if !cliIsAvailable(cli) {
-            Toast.show("\(cli) CLI not found on PATH. Install it first.")
+        let cliName = store.load().defaultCLI.rawValue
+        if !cliIsAvailable(cliName) {
+            Toast.show("\(cliName) CLI not found on PATH. Install it first.")
             return
         }
 
-        ensureSession()
+        ensureSession(cliName: cliName)
+        ensurePopover()
 
-        if sessionExitedUnexpectedly {
-            Toast.show("Session restarted.")
-            sessionExitedUnexpectedly = false
-        }
-
+        let point = NSEvent.mouseLocation
         if let text = selection, !text.isEmpty {
             let template = PromptTemplate(template: store.load().promptTemplate)
             let prompt = template.render(with: text)
-            do {
-                try session?.sendPrompt(prompt)
-            } catch {
-                Toast.show("Couldn't start \(cli): \(error.localizedDescription)")
-                session = nil
-                return
-            }
+            popover?.appendNewPrompt(prompt, near: point)
+        } else {
+            // No new selection — just bring the popover to front
+            popover?.appendNewPrompt("", near: point)
         }
+    }
 
-        openTerminal()
+    private func ensureSession(cliName: String) {
+        if let s = cliSession, s.cliName == cliName { return }
+        cliSession?.cancel()
+        cliSession = CLISession(cliName: cliName)
+    }
+
+    private func ensurePopover() {
+        guard popover == nil, let session = cliSession else { return }
+        popover = LookupPopover(session: session, onClose: { [weak self] in
+            self?.popover = nil
+        })
+    }
+
+    private func startNewSession() {
+        cliSession?.startNewSession()
+        popover?.startNewSession()
+        Toast.show("Started a new session.")
+    }
+
+    private func openSettings() {
+        if settingsWindow == nil {
+            settingsWindow = SettingsWindowController(store: store)
+        }
+        settingsWindow?.showAndFocus()
     }
 
     private func cliIsAvailable(_ cli: String) -> Bool {
@@ -93,58 +109,5 @@ final class AppCoordinator {
         } catch {
             return false
         }
-    }
-
-    private func ensureSession() {
-        if let s = session, s.isRunning { return }
-
-        let cli = store.load().defaultCLI.rawValue
-        let s = SessionManager(command: cli, args: [])
-        s.onProcessExit = { [weak self] in
-            guard let self = self else { return }
-            // Mark as "unexpected exit" so next trigger toasts "Session restarted."
-            // (Distinguishes from explicit endSession via startNewSession.)
-            if self.session != nil {
-                self.sessionExitedUnexpectedly = true
-                self.session = nil
-            }
-        }
-        self.session = s
-    }
-
-    private func openTerminal() {
-        guard let session = session else { return }
-
-        if terminal == nil {
-            terminal = TerminalWindowController(
-                session: session,
-                onNewSession: { [weak self] in self?.startNewSession() },
-                onOpenSettings: { [weak self] in self?.openSettings() }
-            )
-        }
-        terminal?.showAndFocus()
-    }
-
-    private func startNewSession() {
-        let wasRunning = session?.isRunning ?? false
-        // Clear session first so onProcessExit's "unexpected" flag doesn't fire.
-        let old = session
-        session = nil
-        sessionExitedUnexpectedly = false
-        old?.endSession()
-        terminal?.close()
-        terminal = nil
-        ensureSession()
-        openTerminal()
-        if wasRunning {
-            Toast.show("Started a new session.")
-        }
-    }
-
-    private func openSettings() {
-        if settingsWindow == nil {
-            settingsWindow = SettingsWindowController(store: store)
-        }
-        settingsWindow?.showAndFocus()
     }
 }

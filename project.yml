@@ -10,10 +10,6 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "-"
-packages:
-  SwiftTerm:
-    url: https://github.com/migueldeicaza/SwiftTerm
-    from: "1.2.0"
 targets:
   KaSoru:
     type: application
@@ -26,8 +22,6 @@ targets:
         LSUIElement: true
         NSAccessibilityUsageDescription: "ka-soru reads the highlighted text from the frontmost app to send it to codex or claude."
         NSAppleEventsUsageDescription: "ka-soru reads the highlighted text from the frontmost app."
-    dependencies:
-      - package: SwiftTerm
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.kasoru.KaSoru
