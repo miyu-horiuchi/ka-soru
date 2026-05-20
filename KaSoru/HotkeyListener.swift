@@ -2,10 +2,8 @@ import AppKit
 import Carbon.HIToolbox
 
 final class HotkeyListener {
-    /// Virtual keycode for `D` on US keyboard.
-    private static let keyCodeD: Int64 = Int64(kVK_ANSI_D)
+    private static let keyCodeE: Int64 = Int64(kVK_ANSI_E)
 
-    private let detector = DoubleTapDetector(window: 0.3)
     private let onTrigger: () -> Void
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -14,7 +12,7 @@ final class HotkeyListener {
         self.onTrigger = onTrigger
     }
 
-    /// Begins listening. Requires Input Monitoring permission.
+    /// Begins listening for Cmd+E. Requires Input Monitoring permission.
     /// Returns false if the tap could not be created (permission missing).
     @discardableResult
     func start() -> Bool {
@@ -59,16 +57,15 @@ final class HotkeyListener {
     private func handle(type: CGEventType, event: CGEvent) {
         guard type == .keyDown else { return }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        guard keyCode == Self.keyCodeD else { return }
+        guard keyCode == Self.keyCodeE else { return }
 
-        // Suppress if user is typing in a text input.
-        if SelectionReader.focusedElementIsEditable() { return }
+        // Require Command alone — no Shift/Option/Control.
+        let modifiers: CGEventFlags = [.maskCommand, .maskShift, .maskAlternate, .maskControl]
+        let flags = event.flags.intersection(modifiers)
+        guard flags == .maskCommand else { return }
 
-        let now = ProcessInfo.processInfo.systemUptime
-        if detector.register(at: now) {
-            DispatchQueue.main.async { [weak self] in
-                self?.onTrigger()
-            }
+        DispatchQueue.main.async { [weak self] in
+            self?.onTrigger()
         }
     }
 }

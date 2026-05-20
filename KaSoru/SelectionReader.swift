@@ -32,39 +32,6 @@ enum SelectionReader {
         return text
     }
 
-    /// Whether the focused element is editable (text field, text area, or contenteditable).
-    /// Used by HotkeyListener to suppress double-tap-D inside text inputs.
-    static func focusedElementIsEditable() -> Bool {
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedElement: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedElement
-        ) == .success,
-              let element = focusedElement
-        else { return false }
-
-        let ax = element as! AXUIElement
-
-        var role: CFTypeRef?
-        if AXUIElementCopyAttributeValue(ax, kAXRoleAttribute as CFString, &role) == .success,
-           let roleStr = role as? String {
-            if roleStr == kAXTextFieldRole || roleStr == kAXTextAreaRole {
-                return true
-            }
-        }
-
-        // Catches web contenteditable (ChatGPT, Notion, Gmail compose, etc.)
-        var editable: CFTypeRef?
-        if AXUIElementCopyAttributeValue(ax, "AXEditable" as CFString, &editable) == .success,
-           let isEditable = editable as? Bool {
-            return isEditable
-        }
-
-        return false
-    }
-
     /// True if the process has Accessibility permission. Prompts the user on first call
     /// if `prompt: true`.
     static func hasPermission(prompt: Bool = false) -> Bool {

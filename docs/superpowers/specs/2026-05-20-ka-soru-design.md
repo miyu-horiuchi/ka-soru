@@ -7,7 +7,7 @@
 
 ## Summary
 
-ka-soru is a macOS menu bar app. You highlight a sentence anywhere on your Mac, double-tap the `D` key, and a floating terminal popup opens running `codex` (or `claude`) with a configurable prompt that explains the sentence in simpler terms. The CLI session persists across popup closes, so follow-up triggers continue the same conversation.
+ka-soru is a macOS menu bar app. You highlight a sentence anywhere on your Mac, press Cmd+E, and a floating terminal popup opens running `codex` (or `claude`) with a configurable prompt that explains the sentence in simpler terms. The CLI session persists across popup closes, so follow-up triggers continue the same conversation.
 
 ---
 
@@ -16,7 +16,7 @@ ka-soru is a macOS menu bar app. You highlight a sentence anywhere on your Mac, 
 ### Trigger
 
 1. Highlight any text in any macOS app (Safari, Chrome, Preview, Notes, Slack, Mail, etc.).
-2. Press `D` twice within ~300 ms.
+2. Press `Cmd+E`.
 3. A borderless, always-on-top terminal window appears above your current app.
 4. The terminal shows the prompt being sent and streams the CLI's reply.
 5. Type follow-up questions directly into the terminal; close the window when done.
@@ -49,7 +49,7 @@ Stored in `~/Library/Application Support/ka-soru/settings.json`:
 
 App walks the user through granting two macOS permissions:
 - **Accessibility** — needed to read highlighted text from other apps.
-- **Input Monitoring** — needed to detect double-tap-D globally.
+- **Input Monitoring** — needed to detect Cmd+E globally.
 
 A `PermissionGuide` window explains why and deep-links into each pane of System Settings. App will not function until both are granted, and will recheck on every launch.
 
@@ -65,7 +65,7 @@ Eight focused modules, each with a single responsibility:
 
 1. **`MenuBarController`** — `NSStatusItem` with `ks` icon. Dropdown menu: *Open Settings · New Session · Quit*. Entry point that wires up the other components on launch.
 
-2. **`HotkeyListener`** — `CGEventTap` watching system-wide key events. Detects two `D` keydowns within 300 ms. Suppresses trigger when the focused element is editable text. Detection covers: `kAXRoleAttribute` equals `kAXTextFieldRole` or `kAXTextAreaRole`; `kAXEditableAttribute` is true (catches web contenteditable inputs like ChatGPT, Notion, Gmail compose). Fires `trigger()` callback on a real double-tap.
+2. **`HotkeyListener`** — `CGEventTap` watching system-wide key events. Fires on `Cmd+E` (key code `kVK_ANSI_E` with the Command modifier and no Shift/Option/Control). Note: Cmd+E system-wide intercepts the browser's built-in "Use Selection for Find" shortcut.
 
 3. **`SelectionReader`** — calls Accessibility API on the focused element of the frontmost app via `kAXSelectedTextAttribute`. Returns the highlighted string or `nil`.
 
@@ -89,13 +89,13 @@ Eight focused modules, each with a single responsibility:
 - **SwiftTerm** — terminal emulator widget for the popup
 - macOS Accessibility framework (built-in)
 - pty: `Darwin` + `Foundation.Process` (built-in)
-- Global hotkey: custom `CGEventTap` wrapper (we need double-tap detection, which existing libraries like HotKey don't provide)
+- Global hotkey: custom `CGEventTap` wrapper that fires on Cmd+E
 
 ### Data flow (happy path)
 
 1. User highlights *"The mitochondria is the powerhouse of the cell"* in Safari.
-2. User double-taps `D`.
-3. `HotkeyListener` → focused element is not a text input → fires `trigger()`.
+2. User presses `Cmd+E`.
+3. `HotkeyListener` → modifier flags match (Command only) → fires `trigger()`.
 4. `SelectionReader` → Accessibility API → returns the sentence.
 5. `SessionManager.sendPrompt(promptTemplate.render(with: sentence))`:
    - If no session: spawn CLI in pty.
@@ -103,7 +103,7 @@ Eight focused modules, each with a single responsibility:
 6. `TerminalWindow` opens (or refocuses). SwiftTerm attaches to pty stream, renders scrollback then live output.
 7. User reads response. Optional: types follow-up keystrokes → SwiftTerm → pty stdin → CLI.
 8. User closes popup. `SessionManager.detachTerminal()`. CLI keeps running.
-9. Later: another double-tap-D. Same SessionManager reused. New sentence appended as next prompt in same conversation.
+9. Later: another Cmd+E. Same SessionManager reused. New sentence appended as next prompt in same conversation.
 
 ---
 
@@ -111,13 +111,13 @@ Eight focused modules, each with a single responsibility:
 
 | Situation | Behavior |
 |---|---|
-| Double-tap-D, nothing highlighted, no session exists | Screen toast: *"Highlight a sentence first."* No popup. |
-| Double-tap-D, nothing highlighted, session exists | Popup opens attached to existing session. User can type freely. |
+| Cmd+E, nothing highlighted, no session exists | Screen toast: *"Highlight a sentence first."* No popup. |
+| Cmd+E, nothing highlighted, session exists | Popup opens attached to existing session. User can type freely. |
 | First launch, permissions not granted | Opens `PermissionGuide`. App is non-functional until both granted. |
-| CLI binary not on `$PATH` | Popup shows red banner: *"codex CLI not found. Install with: `npm install -g @openai/codex`"* with link to install docs. |
+| CLI binary not on `$PATH` | Toast: *"codex CLI not found on PATH. Install it first."* No popup. |
 | CLI not logged in | No special handling — CLI prints its own OAuth URL; SwiftTerm renders normally; user clicks/copies it, logs in via browser, returns. |
 | Session process dies | Next trigger silently spawns new session. Toast: *"Session restarted."* No data lost (CLI manages its own conversation persistence). |
-| User types "DD" in a text field | Ignored — `HotkeyListener` suppresses when focused element is a text input. |
+| Cmd+E pressed in a browser | Intercepted globally — overrides the browser's "Use Selection for Find" shortcut while ka-soru is running. |
 | User Ctrl+C in popup | SIGINT sent to CLI process (standard terminal behavior). Session stays alive. |
 | New trigger while CLI still responding | New prompt queued, sent after current response finishes. Don't interrupt. |
 
@@ -127,19 +127,17 @@ Eight focused modules, each with a single responsibility:
 
 ### Unit tests (`KaSoruTests/`)
 
-- `HotkeyListener` — double-tap detection (300 ms window), text-input suppression. Driven by a mock event source.
 - `PromptTemplate` — substitution including text with quotes, newlines, very long content, missing placeholder.
 - `SessionManager` — process lifecycle: start, reuse, dead-process recovery, "New Session" tear-down. Mock pty.
 
 ### Manual integration tests
 
-- Highlight text in Safari → D-D → popup opens with CLI explanation.
+- Highlight text in Safari → Cmd+E → popup opens with CLI explanation.
 - Same in Preview (PDF), Notes, Slack, ChatGPT.com, Mail.
-- Close popup → D-D again → same session reopens with full scrollback.
+- Close popup → Cmd+E again → same session reopens with full scrollback.
 - "New Session" button → previous CLI process killed, new one spawned, popup empty.
 - Quit app → CLI process cleanly terminated.
 - Edit prompt template in Settings → next trigger uses new template.
-- Trigger while typing in a text field → no popup (correctly suppressed).
 - First-launch permission flow → PermissionGuide → grant Accessibility → grant Input Monitoring → app becomes functional.
 
 ---
@@ -172,9 +170,10 @@ ka-soru/
 │   ├── Settings.swift               # codable settings + persistence
 │   └── Assets.xcassets/
 └── KaSoruTests/
-    ├── HotkeyListenerTests.swift
     ├── PromptTemplateTests.swift
-    └── SessionManagerTests.swift
+    ├── SessionManagerTests.swift
+    ├── SettingsTests.swift
+    └── SmokeTest.swift
 ```
 
 ---
@@ -185,6 +184,6 @@ ka-soru/
 - iCloud sync of settings or session history
 - Code signing / notarized installer
 - Multiple parallel sessions (tabs)
-- Custom hotkey configuration (double-tap-D is hardcoded)
+- Custom hotkey configuration (Cmd+E is hardcoded)
 - Saving session transcripts to disk
 - Per-app or per-document session scoping
