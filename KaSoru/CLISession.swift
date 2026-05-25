@@ -70,22 +70,26 @@ final class CLISession {
         }
 
         proc.terminationHandler = { [weak self] p in
+            DebugLog.write("CLI: terminated status=\(p.terminationStatus) reason=\(p.terminationReason.rawValue)")
             stdout.fileHandleForReading.readabilityHandler = nil
-            // ALWAYS remove the temp output file — success OR failure.
+
+            // Read the output file BEFORE deleting it.
+            var fileAnswer: String? = nil
             if let outputFile = invocation.outputFile {
+                if let data = try? Data(contentsOf: outputFile),
+                   let text = String(data: data, encoding: .utf8) {
+                    fileAnswer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
                 try? FileManager.default.removeItem(at: outputFile)
             }
+
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if p.terminationStatus == 0 {
                     let finalAnswer: String
-                    if let outputFile = invocation.outputFile,
-                       let data = try? Data(contentsOf: outputFile),
-                       let text = String(data: data, encoding: .utf8) {
-                        finalAnswer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !finalAnswer.isEmpty {
-                            onChunk(finalAnswer)
-                        }
+                    if let a = fileAnswer, !a.isEmpty {
+                        finalAnswer = a
+                        onChunk(a)
                     } else {
                         finalAnswer = streamingAccumulated
                     }
@@ -103,9 +107,11 @@ final class CLISession {
             }
         }
 
+        DebugLog.write("CLI: spawning \(invocation.executable) with \(invocation.args.count) args, outputFile=\(invocation.outputFile?.lastPathComponent ?? "none")")
         do {
             try proc.run()
             self.currentProcess = proc
+            DebugLog.write("CLI: spawned pid=\(proc.processIdentifier)")
             // 60s timeout — if codex hangs, kill it and surface an error so the
             // popover isn't stuck on "Thinking…" forever.
             let runningProc = proc
@@ -119,7 +125,7 @@ final class CLISession {
                 }
             }
         } catch {
-            // If spawn fails outright we still need to clean up the temp file
+            DebugLog.write("CLI: spawn FAILED: \(error)")
             if let outputFile = invocation.outputFile {
                 try? FileManager.default.removeItem(at: outputFile)
             }
@@ -138,7 +144,7 @@ final class CLISession {
             kill(p.processIdentifier, SIGKILL)
         }
         currentProcess = nil
-        nukeStrandedCLIProcesses()
+        nukeStrandedCLIProcesses(excluding: nil)
     }
 
     // MARK: - Cleanup
@@ -147,27 +153,52 @@ final class CLISession {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now() + Self.cleanupInterval, repeating: Self.cleanupInterval)
         timer.setEventHandler { [weak self] in
-            self?.nukeStrandedCLIProcesses()
-            self?.sweepStaleTempFiles()
+            guard let self = self else { return }
+            // ONLY sweep when nothing is actively running — otherwise pkill would
+            // kill the codex we just spawned for the current prompt.
+            DispatchQueue.main.async {
+                if self.currentProcess == nil || !(self.currentProcess?.isRunning ?? false) {
+                    self.nukeStrandedCLIProcesses(excluding: nil)
+                    self.sweepStaleTempFiles()
+                }
+            }
         }
         timer.resume()
         self.cleanupTimer = timer
     }
 
-    private func nukeStrandedCLIProcesses() {
+    /// Kills any stranded codex/claude exec processes that match our arg signature,
+    /// optionally excluding a specific PID we want to keep alive.
+    private func nukeStrandedCLIProcesses(excluding excludedPID: Int32? = nil) {
         let signature: String
         switch cliName {
         case "codex": signature = "--ignore-user-config --ephemeral --ignore-rules"
         case "claude": signature = "--disable-slash-commands"
         default: return
         }
-        let pkill = Process()
-        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        pkill.arguments = ["-9", "-f", signature]
-        pkill.standardOutput = Pipe()
-        pkill.standardError = Pipe()
-        try? pkill.run()
-        pkill.waitUntilExit()
+
+        // Find matching PIDs via pgrep, then SIGKILL each one (skipping excludedPID).
+        let pgrep = Process()
+        pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        pgrep.arguments = ["-f", signature]
+        let pipe = Pipe()
+        pgrep.standardOutput = pipe
+        pgrep.standardError = Pipe()
+        do {
+            try pgrep.run()
+            pgrep.waitUntilExit()
+        } catch {
+            return
+        }
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? nil
+        guard let dataUnwrapped = data,
+              let text = String(data: dataUnwrapped, encoding: .utf8)
+        else { return }
+        for line in text.split(separator: "\n") {
+            guard let pid = Int32(String(line).trimmingCharacters(in: CharacterSet.whitespaces)) else { continue }
+            if pid == excludedPID { continue }
+            kill(pid, SIGKILL)
+        }
     }
 
     /// Remove kasoru temp output files older than 2 minutes.
