@@ -5,7 +5,24 @@ struct LookupView: View {
     var onClose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
+            // Top toolbar
+            HStack {
+                Spacer()
+                Button {
+                    model.reset()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .padding(4)
+                }
+                .buttonStyle(.plain)
+                .help("Refresh — cancel current and clear")
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     if model.turns.isEmpty {
@@ -26,12 +43,18 @@ struct LookupView: View {
                         }
                     }
                     if let err = model.errorMessage {
-                        Text(err)
-                            .font(.system(size: 12))
-                            .foregroundColor(.red)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(err)
+                                .font(.system(size: 12))
+                                .foregroundColor(.red)
+                            Text("Click ↻ above to reset and try again.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 

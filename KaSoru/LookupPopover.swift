@@ -34,6 +34,15 @@ final class LookupViewModel: ObservableObject {
         sendInternal(prompt: text)
     }
 
+    /// Cancels any in-flight CLI call and clears state. Triggered by the refresh button.
+    func reset() {
+        session.cancel()
+        turns.removeAll()
+        errorMessage = nil
+        draft = ""
+        isWaiting = false
+    }
+
     private func sendInternal(prompt: String) {
         errorMessage = nil
         isWaiting = true
