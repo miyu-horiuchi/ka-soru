@@ -36,6 +36,9 @@ final class CLISession {
                     onComplete: @escaping (Result<Void, Error>) -> Void) {
         cancel()
 
+        // Capture the raw user-typed prompt before we wrap it in conversation history,
+        // so subsequent turns don't repeatedly prepend "User: User: User: ..."
+        let rawUserPrompt = prompt
         let invocation = buildInvocation(prompt: prompt)
 
         let proc = Process()
@@ -93,7 +96,7 @@ final class CLISession {
                     } else {
                         finalAnswer = streamingAccumulated
                     }
-                    self.appendHistory(user: invocation.fullText, assistant: finalAnswer)
+                    self.appendHistory(rawUserPrompt: rawUserPrompt, assistant: finalAnswer)
                     self.hasOngoingConversation = true
                     onComplete(.success(()))
                 } else {
@@ -141,6 +144,7 @@ final class CLISession {
 
     func cancel() {
         if let p = currentProcess, p.isRunning {
+            DebugLog.write("CLI: cancel() killing pid=\(p.processIdentifier)")
             kill(p.processIdentifier, SIGKILL)
         }
         currentProcess = nil
@@ -217,8 +221,8 @@ final class CLISession {
 
     // MARK: - History
 
-    private func appendHistory(user: String, assistant: String) {
-        history.append((user: user, assistant: assistant))
+    private func appendHistory(rawUserPrompt: String, assistant: String) {
+        history.append((user: rawUserPrompt, assistant: assistant))
         if history.count > Self.maxHistoryTurns {
             history.removeFirst(history.count - Self.maxHistoryTurns)
         }

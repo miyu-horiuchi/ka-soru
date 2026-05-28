@@ -36,6 +36,7 @@ final class LookupViewModel: ObservableObject {
 
     /// Cancels any in-flight CLI call and clears state. Triggered by the refresh button.
     func reset() {
+        DebugLog.write("MODEL: reset() called")
         session.cancel()
         turns.removeAll()
         errorMessage = nil
@@ -120,6 +121,9 @@ final class LookupPopover {
     }
 
     func close() {
+        DebugLog.write("POPOVER: close() - canceling session and hiding")
+        // Cancel any in-flight CLI call so codex doesn't keep running orphaned.
+        session.cancel()
         removeClickOutsideMonitor()
         window.orderOut(nil)
         onClose()
