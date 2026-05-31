@@ -4,8 +4,38 @@ import Foundation
 ///
 /// For codex, we ask it to write the final answer to a temp file (-o) and ignore the
 /// noisy banner stream on stdout. The popover shows "Thinking…" until the file is ready.
+/// Thread-safe accumulator for stdout chunks read off a background readability handler.
+private final class RawBuffer {
+    private let lock = NSLock()
+    private var storage = ""
+    func append(_ s: String) { lock.lock(); storage += s; lock.unlock() }
+    var value: String { lock.lock(); defer { lock.unlock() }; return storage }
+}
+
 final class CLISession {
     let cliName: String
+
+    /// userInfo key on a failure error indicating the CLI failed because auth is dead
+    /// (token invalidated / refresh-token reuse / 401). The UI uses this to offer sign-in.
+    static let authErrorKey = "CLISessionAuthError"
+
+    /// Heuristic: does this CLI output indicate the user's credentials are no longer valid
+    /// and they need to sign in again?
+    static func isAuthError(_ text: String) -> Bool {
+        let t = text.lowercased()
+        let markers = [
+            "token_invalidated",
+            "refresh_token_reused",
+            "authentication token has been invalidated",
+            "your refresh token was already used",
+            "please try signing in again",
+            "please log out and sign in",
+            "401 unauthorized",
+            "unauthorized",
+            "auth error: 401",
+        ]
+        return markers.contains { t.contains($0) }
+    }
 
     /// Keep at most this many recent turns in the prompt history sent to the model.
     /// Older turns are dropped so the prompt doesn't grow unbounded.
@@ -58,6 +88,9 @@ final class CLISession {
         proc.standardError = stderr
 
         var streamingAccumulated = ""
+        // For non-clean CLIs (codex) we don't surface stdout live, but we keep a copy
+        // so failures can be inspected for auth markers (the 401 banner prints here).
+        let rawStdout = RawBuffer()
 
         if invocation.streamsClean {
             stdout.fileHandleForReading.readabilityHandler = { handle in
@@ -68,7 +101,9 @@ final class CLISession {
             }
         } else {
             stdout.fileHandleForReading.readabilityHandler = { handle in
-                _ = handle.availableData
+                let data = handle.availableData
+                guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
+                rawStdout.append(chunk)
             }
         }
 
@@ -102,9 +137,13 @@ final class CLISession {
                 } else {
                     let stderrData = (try? stderr.fileHandleForReading.readToEnd()) ?? nil
                     let stderrText = stderrData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    // Auth markers may appear on stderr OR on codex's discarded stdout banner.
+                    let combined = stderrText + "\n" + rawStdout.value
                     let msg = stderrText.isEmpty ? "\(self.cliName) exited with status \(p.terminationStatus)" : stderrText
+                    let isAuth = Self.isAuthError(combined)
                     onComplete(.failure(NSError(domain: "CLISession", code: Int(p.terminationStatus),
-                                                userInfo: [NSLocalizedDescriptionKey: msg])))
+                                                userInfo: [NSLocalizedDescriptionKey: msg,
+                                                           CLISession.authErrorKey: isAuth])))
                 }
                 self.currentProcess = nil
             }
@@ -140,6 +179,77 @@ final class CLISession {
         cancel()
         hasOngoingConversation = false
         history.removeAll()
+    }
+
+    /// Re-authenticates the underlying CLI. For codex this clears the poisoned
+    /// refresh token (`logout`) and starts the browser OAuth flow (`login`),
+    /// which opens the user's browser and blocks until they finish signing in.
+    /// Currently only codex supports this; other CLIs complete immediately.
+    func authenticate(onComplete: @escaping (Result<Void, Error>) -> Void) {
+        guard cliName == "codex" else {
+            DispatchQueue.main.async { onComplete(.success(())) }
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // 1. Clear the stale credentials (best-effort — ignore failures).
+            Self.runBlocking(executable: "codex", args: ["logout"], timeout: 30)
+
+            // 2. Start the interactive browser login. This opens the browser and
+            //    waits for the OAuth callback, so give it a generous timeout.
+            let result = Self.runBlocking(executable: "codex", args: ["login"], timeout: 300)
+
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    onComplete(.success(()))
+                case .failure(let err):
+                    onComplete(.failure(err))
+                }
+            }
+        }
+    }
+
+    /// Runs a CLI command to completion off the main thread, returning success on exit 0.
+    @discardableResult
+    private static func runBlocking(executable: String, args: [String], timeout: TimeInterval) -> Result<Void, Error> {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = [executable] + args
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "dumb"
+        env["NO_COLOR"] = "1"
+        proc.environment = env
+        let out = Pipe(); let err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        proc.standardInput = Pipe()
+
+        do {
+            try proc.run()
+        } catch {
+            DebugLog.write("AUTH: failed to launch \(executable) \(args): \(error)")
+            return .failure(error)
+        }
+
+        // Enforce a timeout so a hung login can't wedge forever.
+        let deadline = DispatchTime.now() + timeout
+        let watchdog = DispatchWorkItem {
+            if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+        }
+        DispatchQueue.global().asyncAfter(deadline: deadline, execute: watchdog)
+        proc.waitUntilExit()
+        watchdog.cancel()
+
+        if proc.terminationStatus == 0 {
+            return .success(())
+        }
+        let errData = (try? err.fileHandleForReading.readToEnd()) ?? nil
+        let errText = errData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let msg = errText.isEmpty ? "\(executable) \(args.joined(separator: " ")) exited \(proc.terminationStatus)" : errText
+        DebugLog.write("AUTH: \(executable) \(args) failed: \(msg)")
+        return .failure(NSError(domain: "CLISession.auth", code: Int(proc.terminationStatus),
+                                userInfo: [NSLocalizedDescriptionKey: msg]))
     }
 
     func cancel() {

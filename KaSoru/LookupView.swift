@@ -42,7 +42,36 @@ struct LookupView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    if let err = model.errorMessage {
+                    if model.needsAuth {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Your Codex sign-in expired.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.primary)
+                            Text("Sign in again to continue. This opens your browser.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            Button {
+                                model.authenticate()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if model.isAuthenticating {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text("Signing in…")
+                                    } else {
+                                        Image(systemName: "person.crop.circle.badge.checkmark")
+                                        Text("Sign in to Codex")
+                                    }
+                                }
+                            }
+                            .disabled(model.isAuthenticating)
+                            if let err = model.errorMessage {
+                                Text(err)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.red)
+                            }
+                        }
+                    } else if let err = model.errorMessage {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(err)
                                 .font(.system(size: 12))

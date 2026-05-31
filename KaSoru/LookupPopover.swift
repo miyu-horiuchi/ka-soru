@@ -13,6 +13,13 @@ final class LookupViewModel: ObservableObject {
     @Published var draft: String = ""
     @Published var isWaiting: Bool = false
     @Published var errorMessage: String?
+    /// True when the last failure was an expired/invalidated login. Drives the sign-in UI.
+    @Published var needsAuth: Bool = false
+    /// True while the browser OAuth flow is in progress.
+    @Published var isAuthenticating: Bool = false
+
+    /// The prompt that failed with an auth error, so we can retry it after sign-in.
+    private var pendingRetryPrompt: String?
 
     let session: CLISession
     weak var popover: LookupPopover?
@@ -40,12 +47,44 @@ final class LookupViewModel: ObservableObject {
         session.cancel()
         turns.removeAll()
         errorMessage = nil
+        needsAuth = false
+        pendingRetryPrompt = nil
         draft = ""
         isWaiting = false
     }
 
+    /// Runs the codex sign-in flow (opens browser), then retries the prompt that failed.
+    func authenticate() {
+        guard !isAuthenticating else { return }
+        DebugLog.write("MODEL: authenticate() starting")
+        isAuthenticating = true
+        errorMessage = nil
+        session.authenticate { [weak self] result in
+            guard let self = self else { return }
+            self.isAuthenticating = false
+            switch result {
+            case .success:
+                DebugLog.write("MODEL: authenticate() succeeded")
+                self.needsAuth = false
+                if let retry = self.pendingRetryPrompt {
+                    self.pendingRetryPrompt = nil
+                    // Drop the failed (empty-answer) turn before retrying so it isn't duplicated.
+                    if let last = self.turns.last, last.answer.isEmpty {
+                        self.turns.removeLast()
+                    }
+                    self.sendInternal(prompt: retry)
+                }
+            case .failure(let err):
+                DebugLog.write("MODEL: authenticate() failed: \(err.localizedDescription)")
+                // Stay in the sign-in state so the user can try again.
+                self.errorMessage = "Sign-in failed: \(err.localizedDescription)"
+            }
+        }
+    }
+
     private func sendInternal(prompt: String) {
         errorMessage = nil
+        needsAuth = false
         isWaiting = true
         turns.append(LookupTurn(prompt: prompt, answer: ""))
         let turnIndex = turns.count - 1
@@ -57,7 +96,15 @@ final class LookupViewModel: ObservableObject {
             guard let self = self else { return }
             self.isWaiting = false
             if case .failure(let err) = result {
-                self.errorMessage = err.localizedDescription
+                let nsErr = err as NSError
+                if nsErr.userInfo[CLISession.authErrorKey] as? Bool == true {
+                    // Auth is dead — surface the sign-in flow instead of a raw 401.
+                    self.needsAuth = true
+                    self.pendingRetryPrompt = prompt
+                    self.errorMessage = nil
+                } else {
+                    self.errorMessage = err.localizedDescription
+                }
             }
         }
     }
