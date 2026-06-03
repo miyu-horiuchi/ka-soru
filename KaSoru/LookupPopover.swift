@@ -21,6 +21,13 @@ final class LookupViewModel: ObservableObject {
     /// The prompt that failed with an auth error, so we can retry it after sign-in.
     private var pendingRetryPrompt: String?
 
+    /// Bumped whenever we start a new request or reset. CLI callbacks capture the
+    /// generation they were launched under and bail if it no longer matches — so a
+    /// process we just cancelled/killed can't stomp freshly-cleared state. Without
+    /// this, a killed codex's late `onComplete` would re-surface an error (or the
+    /// sign-in screen) right after the user pressed refresh, making refresh look broken.
+    private var generation = 0
+
     let session: CLISession
     weak var popover: LookupPopover?
 
@@ -44,6 +51,7 @@ final class LookupViewModel: ObservableObject {
     /// Cancels any in-flight CLI call and clears state. Triggered by the refresh button.
     func reset() {
         DebugLog.write("MODEL: reset() called")
+        generation += 1   // invalidate any in-flight CLI callbacks before clearing state
         session.cancel()
         turns.removeAll()
         errorMessage = nil
@@ -83,6 +91,8 @@ final class LookupViewModel: ObservableObject {
     }
 
     private func sendInternal(prompt: String) {
+        generation += 1   // any previously in-flight request is now stale
+        let gen = generation
         errorMessage = nil
         needsAuth = false
         isWaiting = true
@@ -90,10 +100,10 @@ final class LookupViewModel: ObservableObject {
         let turnIndex = turns.count - 1
 
         session.sendPrompt(prompt) { [weak self] chunk in
-            guard let self = self, turnIndex < self.turns.count else { return }
+            guard let self = self, gen == self.generation, turnIndex < self.turns.count else { return }
             self.turns[turnIndex].answer += chunk
         } onComplete: { [weak self] result in
-            guard let self = self else { return }
+            guard let self = self, gen == self.generation else { return }
             self.isWaiting = false
             if case .failure(let err) = result {
                 let nsErr = err as NSError
