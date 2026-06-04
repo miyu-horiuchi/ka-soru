@@ -31,6 +31,11 @@ final class AppCoordinator {
     }
 
     private func showPermissionGuide() {
+        // Don't stack a second guide window if one is already up (repeated triggers).
+        if let existing = permissionGuide {
+            existing.showAndFocus()
+            return
+        }
         let guide = PermissionGuideController { [weak self] in
             self?.permissionGuide = nil
             self?.attachHotkey()
@@ -54,6 +59,18 @@ final class AppCoordinator {
     }
 
     private func onTrigger() {
+        // Accessibility is revoked whenever the app's code identity changes (e.g. after a
+        // rebuild of this ad-hoc-signed app). Without it, both the AX selection read and the
+        // synthetic-Cmd+C fallback fail silently, so every lookup comes up empty. Detect that
+        // here and send the user to re-grant, instead of opening a dead popover with no clue.
+        if Permissions.accessibility() == .missing {
+            DebugLog.write("TRIG: accessibility missing → opening pane + guide")
+            Permissions.openAccessibilityPane()
+            Toast.show("ka-soru lost Accessibility permission (this happens after an update). Re-add it in System Settings, then try again.")
+            showPermissionGuide()
+            return
+        }
+
         let selection = SelectionReader.read()
         DebugLog.write("TRIG: selection=\((selection ?? "<nil>").prefix(60)) popover=\(popover != nil ? "exists" : "nil")")
 

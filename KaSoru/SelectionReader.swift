@@ -64,26 +64,35 @@ enum SelectionReader {
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
 
-        // Brief wait for the target app to update the pasteboard
-        Thread.sleep(forTimeInterval: 0.08)
-
-        let text: String?
-        if pb.changeCount != savedChangeCount {
-            text = pb.string(forType: .string)
-            DebugLog.write("SEL: fallback copy got \((text ?? "<nil>").prefix(60))")
-        } else {
-            text = nil
-            DebugLog.write("SEL: fallback copy got nothing (changeCount unchanged)")
+        // Poll for the target app to update the pasteboard. A fixed 80ms sleep was too
+        // short for slower apps (the copy lands but we'd already given up), so wait up to
+        // ~0.5s, breaking as soon as the pasteboard actually changes.
+        var text: String? = nil
+        let deadline = Date().addingTimeInterval(0.5)
+        while Date() < deadline {
+            if pb.changeCount != savedChangeCount {
+                text = pb.string(forType: .string)
+                DebugLog.write("SEL: fallback copy got \((text ?? "<nil>").prefix(60))")
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if text == nil {
+            DebugLog.write("SEL: fallback copy got nothing (changeCount unchanged after 0.5s)")
         }
 
-        // Restore previous clipboard
+        // Restore previous clipboard. Write every saved item in a single writeObjects call —
+        // calling it once per item after clearContents() loses all but the last item.
         pb.clearContents()
-        for itemDict in savedItems {
+        let restored = savedItems.map { itemDict -> NSPasteboardItem in
             let item = NSPasteboardItem()
             for (typeRaw, data) in itemDict {
                 item.setData(data, forType: NSPasteboard.PasteboardType(typeRaw))
             }
-            pb.writeObjects([item])
+            return item
+        }
+        if !restored.isEmpty {
+            pb.writeObjects(restored)
         }
 
         return (text?.isEmpty == false) ? text : nil

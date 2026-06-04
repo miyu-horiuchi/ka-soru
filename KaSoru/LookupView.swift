@@ -29,13 +29,18 @@ struct LookupView: View {
                         Text("Waiting…")
                             .foregroundColor(.secondary)
                     }
-                    ForEach(Array(model.turns.enumerated()), id: \.offset) { _, turn in
+                    ForEach(Array(model.turns.enumerated()), id: \.offset) { index, turn in
+                        // Only the latest turn, while we're still waiting, should show
+                        // "Thinking…". A completed turn that came back empty would otherwise
+                        // be stuck on "Thinking…" forever.
+                        let isLatest = index == model.turns.count - 1
+                        let placeholder = (isLatest && model.isWaiting) ? "Thinking…" : "(no response)"
                         VStack(alignment: .leading, spacing: 4) {
                             Text(turn.prompt)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.secondary)
                                 .textSelection(.enabled)
-                            Text(turn.answer.isEmpty ? "Thinking…" : turn.answer)
+                            Text(turn.answer.isEmpty ? placeholder : turn.answer)
                                 .font(.system(size: 13))
                                 .foregroundColor(.primary)
                                 .textSelection(.enabled)
